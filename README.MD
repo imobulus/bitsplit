@@ -5,5 +5,5 @@ Splitting:
 * `-n <int>` the number of summon files you want to have
 
 Recovery:
-* `-recover` tag is needed to tell the program that you want to recover your file from key files
+* `-restore` tag is needed to tell the program that you want to recover your file from key files
 * `-info <info file name>` program will be initialized with info file, and recover the original file according to it
