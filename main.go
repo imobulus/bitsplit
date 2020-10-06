@@ -6,8 +6,11 @@ import (
 	"io"
 	"io/ioutil"
 	"math/rand"
+	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
 
 func checkErr(err error) error{
@@ -19,10 +22,24 @@ func checkErr(err error) error{
 	return fmt.Errorf("")
 }
 
-func log(msg string) {
+func log(msg interface{}) {
 	if msg != "" {
 		fmt.Println(msg)
 	}
+}
+
+func getSeed() int64 {
+	seed := time.Now().UTC().UnixNano()
+	resp, err := http.Get("http://www.random.org/integers/?num=2&min=-999999999&max=999999999&col=1&base=10&format=plain&rnd=new")
+	numBytes, err0 := ioutil.ReadAll(resp.Body)
+	numStrings := strings.Split(string(numBytes), "\n")
+	num1, err1 := strconv.ParseInt(numStrings[0], 10, 64)
+	num2, err2 := strconv.ParseInt(numStrings[1], 10, 64)
+	if err == nil && err0 == nil && err1 == nil && err2 == nil {
+		log("adding numbers from random.org")
+		seed += num1 + (1000000000 * num2)
+	}
+	return seed
 }
 
 func split(file io.Reader, keys []io.Writer) error {
@@ -51,6 +68,14 @@ func split(file io.Reader, keys []io.Writer) error {
 		}
 	}
 	return nil
+}
+
+func splitIntoFiles(file io.Reader, keys []*os.File) error {
+	keyWriters := make([]io.Writer, len(keys))
+	for i, key := range keys {
+		keyWriters[i] = key
+	}
+	return split(file, keyWriters)
 }
 
 func join(file io.Writer, keys []io.Reader) error {
@@ -90,6 +115,14 @@ func join(file io.Writer, keys []io.Reader) error {
 	return nil
 }
 
+func joinFromFiles(file io.Writer, keys []*os.File) error {
+	keyWriters := make([]io.Reader, len(keys))
+	for i, key := range keys {
+		keyWriters[i] = key
+	}
+	return join(file, keyWriters)
+}
+
 func openViaInfo(infFileName string) (*os.File, []*os.File, error) {
 	infoBytes, err := ioutil.ReadFile(infFileName)
 	if err = checkErr(err); err != nil {
@@ -120,7 +153,128 @@ func openViaInfo(infFileName string) (*os.File, []*os.File, error) {
 	return file, keyFiles, nil
 }
 
+func runCommandLine() {
+	splitMode := flag.NewFlagSet("split", flag.ExitOnError)
+	splitKeyCount := splitMode.Int("k", 2, "the number of summons file will be split to")
+
+	joinMode := flag.NewFlagSet("join", flag.ExitOnError)
+	joinConfig := joinMode.String("config", "", "configuration file with the list of keys, optional")
+	//joinOutput := joinMode.String("file", "", "output file name")
+
+	switch os.Args[1] {
+	case "split":
+		rand.Seed(getSeed())
+
+		splitMode.Parse(os.Args[2:])
+		splitTail := splitMode.Args()
+		if len(splitTail) == 0 {
+			log("error: no specification given")
+			os.Exit(1)
+		}
+		splitFileName, splitTail := splitTail[0], splitTail[1:]
+
+        if splitFileName == "" {
+        	log("error: -file not given")
+        	os.Exit(1)
+		}
+
+		file, err := os.Open(splitFileName)
+		if err != nil {
+			log("error while opening input file: " + err.Error())
+			os.Exit(1)
+		}
+		keyFiles := make([]*os.File, *splitKeyCount)
+
+		if len(splitTail) > 0 {
+			if len(splitTail) < *splitKeyCount {
+				log("error: provided less key files than keys stated")
+				os.Exit(1)
+			}
+			for i := 0; i < *splitKeyCount; i++ {
+				keyFiles[i], err = os.Create(splitTail[i])
+				if err != nil {
+					log("error while opening output file: " + err.Error())
+					os.Exit(1)
+				}
+			}
+		} else {
+			for i := 0; i < *splitKeyCount; i++ {
+				keyFiles[i], err = os.Create(fmt.Sprintf("%s.key%d", splitFileName, i))
+				if err != nil {
+					log("error while opening output file: " + err.Error())
+					os.Exit(1)
+				}
+			}
+		}
+
+		defer func() {
+			file.Close()
+			for _, tempFile := range keyFiles {
+				tempFile.Close()
+			}
+		}()
+
+		err = splitIntoFiles(file, keyFiles)
+		if err != nil {
+			log("error while splitting: " + err.Error())
+		}
+
+	case "join":
+		joinMode.Parse(os.Args[2:])
+		joinTail := joinMode.Args()
+		if *joinConfig != "" {
+			file, keyFiles, err := openViaInfo(*joinConfig)
+			if err != nil {
+				log("error while opening via config: " + err.Error())
+				os.Exit(1)
+			}
+			err = joinFromFiles(file, keyFiles)
+			if err != nil {
+				log("error while joining: " + err.Error())
+			}
+		} else {
+			if len(joinTail) == 0 {
+				log("error: no files specified")
+				os.Exit(1)
+			}
+			joinOutput, joinTail := joinTail[0], joinTail[1:]
+			if joinOutput == "" {
+				log("no output file given")
+				os.Exit(1)
+			}
+			file, err := os.Create(joinOutput)
+			if err != nil {
+				log("error while opening output: " + err.Error())
+			    os.Exit(1)
+			}
+			keyFiles := make([]*os.File, len(joinTail))
+			for i, keyName := range joinTail {
+				keyFiles[i], err = os.Open(keyName)
+				if err != nil {
+					log("error while opening key: " + err.Error())
+				}
+			}
+
+			defer func() {
+				file.Close()
+				for _, key := range keyFiles {
+					key.Close()
+				}
+			}()
+
+			err = joinFromFiles(file, keyFiles)
+			if err != nil {
+				log("error while joining: " + err.Error())
+			}
+		}
+	}
+}
+
 func main() {
+	runCommandLine()
+}
+
+func _runCommandLine() {
 	restoreMode := flag.Bool("restore", false, "")
 	infoFile := flag.String("info", "", "info file name")
 	splitNum := flag.Int("n", 2, "number of files to split to")
@@ -156,13 +310,13 @@ func main() {
 			os.Exit(1)
 		}
 	} else {
-        if *splitNum < 2 {
-        	log("split number should be greater than 2")
-        	os.Exit(1)
+		if *splitNum < 2 {
+			log("split number should be greater than 2")
+			os.Exit(1)
 		}
-        if *splitName == "" {
-        	log("no split file name given")
-        	os.Exit(1)
+		if *splitName == "" {
+			log("no split file name given")
+			os.Exit(1)
 		}
 		infoFile, err := os.Create(fmt.Sprintf("%s.info", *splitName))
 		defer infoFile.Close()
