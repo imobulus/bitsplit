@@ -1,5 +1,5 @@
 This is a simple command line tool to split files into random per-byte summons.
-Random seed for `math/rand` is the sum of current time and random number from (random.org)[https://random.org]
+Random seed for `math/rand` is the sum of current time and random number from [random.org](https://random.org)
 
 Splitting:
 * Usage: `bitsplit split <flags> <input file> <output files>`
