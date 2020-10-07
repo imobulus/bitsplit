@@ -1,10 +1,16 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"math/rand"
 	"net/http"
 	"os"
@@ -13,40 +19,92 @@ import (
 	"time"
 )
 
-func checkErr(err error) error{
-	if err == nil {
-		return nil
+const VERSION = "v0.0.3"
+
+func errorFatal(message string, err error) {
+	if err != nil {
+		log.Println(message)
+		log.Println(err)
+		os.Exit(1)
 	}
-	log("its me!")
-	log(err.Error())
-	return fmt.Errorf("")
 }
 
-func log(msg interface{}) {
-	if msg != "" {
-		fmt.Println(msg)
+func prompt(action string) bool {
+	reader := bufio.NewReader(os.Stdin)
+	log.Print(action + " [y/n] ")
+	text, _ := reader.ReadString('\n')
+	text = text[:len(text) - 2]
+	return (strings.ToLower(text) == "y") || (strings.ToLower(text) == "yes")
+}
+
+func askForRewrite(fileName string) {
+	if ! prompt(fmt.Sprintf("file %s already exists, do you want to overwrite it?", fileName)) {
+		log.Fatal("error: file already exists")
 	}
+}
+
+func fileExists(filename string) bool {
+	info, err := os.Stat(filename)
+	if os.IsNotExist(err) {
+		return false
+	}
+	return !info.IsDir()
+}
+
+func isFlagPassed(name string) bool {
+	found := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
 }
 
 func getSeed() int64 {
 	seed := time.Now().UTC().UnixNano()
-	resp, err := http.Get("http://www.random.org/integers/?num=2&min=-999999999&max=999999999&col=1&base=10&format=plain&rnd=new")
-	numBytes, err0 := ioutil.ReadAll(resp.Body)
-	numStrings := strings.Split(string(numBytes), "\n")
-	num1, err1 := strconv.ParseInt(numStrings[0], 10, 64)
-	num2, err2 := strconv.ParseInt(numStrings[1], 10, 64)
-	if err == nil && err0 == nil && err1 == nil && err2 == nil {
-		log("adding numbers from random.org")
-		seed += num1 + (1000000000 * num2)
+
+	addRandOrg := func() {
+		resp, err := http.Get("http://www.random.org/integers/?num=4&min=0&max=65535&col=1&base=10&format=plain&rnd=new")
+		if err != nil {
+			log.Println("warning: no response from random.org")
+			log.Println(err)
+			return
+		}
+		numBytes, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Println("warning: reading response from random.org")
+			log.Println(err)
+			return
+		}
+
+		numStrings := strings.Split(string(numBytes), "\n")
+		toAdd := int64(0)
+		for _, ns := range numStrings[:4] {
+			n, err := strconv.ParseInt(ns, 10, 64)
+			if err != nil {
+				log.Println("warning: cannot parse string to int")
+				log.Println(err)
+				return
+			}
+			toAdd *= 65536
+			toAdd += n
+		}
+		seed += toAdd
+		log.Println("using numbers from random.org")
 	}
+	addRandOrg()
+
 	return seed
 }
 
 func split(file io.Reader, keys []io.Writer) error {
 	data, err := ioutil.ReadAll(file)
-	if err = checkErr(err); err != nil {
+	if err != nil {
+		log.Println("while reading file contents")
 		return err
 	}
+
 	l := len(keys)
 	if l < 2 {
 		return fmt.Errorf("less than 2 key files provided")
@@ -56,15 +114,14 @@ func split(file io.Reader, keys []io.Writer) error {
 
 	for _, b := range data {
 		sum := byte(0)
-		for i := 0; i < l-1; i++ {
-			r := byte(rand.Intn(256))
-			rands[i] = r
-			sum += r
+		rand.Read(rands)
+		for _, k := range rands {
+			sum += k
 		}
 
-		keys[0].Write([]byte{b-sum})
+		keys[0].Write([]byte{b - sum})
         for i, key := range keys[1:] {
-        	key.Write([]byte{rands[i]})
+			key.Write([]byte{rands[i]})
 		}
 	}
 	return nil
@@ -88,7 +145,8 @@ func join(file io.Writer, keys []io.Reader) error {
 
     for i, key := range keys {
     	contents[i], err = ioutil.ReadAll(key)
-    	if err = checkErr(err); err != nil {
+    	if err != nil {
+    		log.Println("error reading key")
     		return err
 		}
 	}
@@ -108,7 +166,8 @@ func join(file io.Writer, keys []io.Reader) error {
 			}
 		}
 		_, err := file.Write([]byte{sum})
-		if err = checkErr(err); err != nil {
+		if err != nil {
+			log.Println("error writing result")
 			return err
 		}
 	}
@@ -125,7 +184,8 @@ func joinFromFiles(file io.Writer, keys []*os.File) error {
 
 func openViaInfo(infFileName string) (*os.File, []*os.File, error) {
 	infoBytes, err := ioutil.ReadFile(infFileName)
-	if err = checkErr(err); err != nil {
+	if err != nil {
+		log.Println("error reading config file")
 		return nil, nil, err
 	}
 	info := string(infoBytes)
@@ -134,7 +194,8 @@ func openViaInfo(infFileName string) (*os.File, []*os.File, error) {
 	keyFileNames := lines[1:]
 
 	file, err := os.Create(fileName)
-	if err = checkErr(err); err != nil {
+	if err != nil {
+		log.Println("error creating output")
 		return nil, nil, err
 	}
 
@@ -144,7 +205,8 @@ func openViaInfo(infFileName string) (*os.File, []*os.File, error) {
 			continue
 		}
 		keyFile, err := os.Open(keyName)
-		if err = checkErr(err); err != nil {
+		if err != nil {
+			log.Println("error opening keys")
 			return nil, nil, err
 		}
 		keyFiles = append(keyFiles, keyFile)
@@ -153,57 +215,150 @@ func openViaInfo(infFileName string) (*os.File, []*os.File, error) {
 	return file, keyFiles, nil
 }
 
+func aesGCMEncrypt(file io.Reader, output io.Writer, key []byte) error {
+	fileContents, err := ioutil.ReadAll(file)
+	if err != nil {
+		log.Println("while reading contents of encrypted file")
+		return err
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		log.Println("while creating cipher block")
+		return err
+	}
+
+	aesGCM, err := cipher.NewGCM(block)
+	if err != nil {
+		log.Println("while creating gcm encryptor")
+		return err
+	}
+
+	nonce := make([]byte, aesGCM.NonceSize())
+	rand.Read(nonce)
+
+	encryptedData := aesGCM.Seal(nonce, nonce, fileContents, nil)
+	output.Write(encryptedData)
+	return nil
+}
+
+func aesGCMDecrypt(file io.Reader, output io.Writer, key []byte) error {
+    c, err := aes.NewCipher(key)
+    if err != nil {
+    	log.Println("error while creating decryption cipher")
+    	return err
+	}
+
+	aesGCM, err := cipher.NewGCM(c)
+	if err != nil {
+		log.Println("error while creating decryption GCM")
+		return err
+	}
+
+	nonceSize := aesGCM.NonceSize()
+
+	data, err := ioutil.ReadAll(file)
+	if err != nil {
+		log.Println("error while reading the file")
+		return err
+	}
+
+	if len(data) < nonceSize {
+		return fmt.Errorf("encrypted file must be bigger than nonce size")
+	}
+
+	nonce, data := data[:nonceSize], data[nonceSize:]
+	decrypted, err := aesGCM.Open(nil, nonce, data, nil)
+	if err != nil {
+		log.Println("error while decrypting")
+		return err
+	}
+
+	output.Write(decrypted)
+	return nil
+}
+
 func runCommandLine() {
 	splitMode := flag.NewFlagSet("split", flag.ExitOnError)
 	splitKeyCount := splitMode.Int("k", 2, "the number of summons file will be split to")
+	splitForceRewrite := splitMode.Bool("f", false, "force rewriting key files")
 
 	joinMode := flag.NewFlagSet("join", flag.ExitOnError)
-	joinConfig := joinMode.String("config", "", "configuration file with the list of keys, optional")
-	//joinOutput := joinMode.String("file", "", "output file name")
+	joinConfig := joinMode.String("config", "",
+		                    "configuration file with the output file and list of keys, optional")
+
+	aesEncMode := flag.NewFlagSet("encrypt-aes", flag.ExitOnError)
+	aesEncKey := aesEncMode.String("key", "", "AES key in hex format")
+	aesEncRewrite := aesEncMode.Bool("r", false, "use this flag to rewrite file with encrypted data")
+	aesEncForce := aesEncMode.Bool("f", false, "use this flag to force rewriting")
+	aesEncHex := aesEncMode.Bool("hex", false, "use this flag to save key in hex representation")
+
+	aesDecMode := flag.NewFlagSet("decrypt-aes", flag.ExitOnError)
+	aesDecKey := aesDecMode.String("key", "", "AES key in hex format")
+	aesDecForce := aesDecMode.Bool("f", false, "use this flag to force rewriting")
+	aesDecHex := aesDecMode.Bool("hex", false, "use this flag to load key, saved in hex representation")
+	aesDecRewrite := aesDecMode.Bool("r", false, "use this flag to rewrite file with decrypted data")
+
+	if len(os.Args) == 1 {
+		log.Println(fmt.Sprintf("This is bitsplit %s. Visit github.com/imobulus/bitsplit or use --help", VERSION))
+		os.Exit(0)
+	}
 
 	switch os.Args[1] {
 	case "split":
-		rand.Seed(getSeed())
-
 		splitMode.Parse(os.Args[2:])
 		splitTail := splitMode.Args()
+		splitCountProvided := isFlagPassed("k")
+
 		if len(splitTail) == 0 {
-			log("error: no specification given")
-			os.Exit(1)
+			log.Fatal("error: no specification given")
 		}
 		splitFileName, splitTail := splitTail[0], splitTail[1:]
 
         if splitFileName == "" {
-        	log("error: -file not given")
-        	os.Exit(1)
+        	log.Fatal("error: file not given")
 		}
 
 		file, err := os.Open(splitFileName)
-		if err != nil {
-			log("error while opening input file: " + err.Error())
-			os.Exit(1)
-		}
-		keyFiles := make([]*os.File, *splitKeyCount)
+		errorFatal("error while opening input file", err)
+
+		var keyFiles []*os.File
 
 		if len(splitTail) > 0 {
-			if len(splitTail) < *splitKeyCount {
-				log("error: provided less key files than keys stated")
-				os.Exit(1)
+			if !splitCountProvided {
+				*splitKeyCount = len(splitTail)
 			}
+			if len(splitTail) < *splitKeyCount {
+				log.Fatal("error: provided less key files than keys stated")
+			}
+
+			if !*splitForceRewrite {
+				for i := 0; i < *splitKeyCount; i++ {
+					if fileExists(splitTail[i]) {
+						log.Fatal(fmt.Sprintf("file %s already exists. Use -f to force rewriting", splitTail[i]))
+					}
+				}
+			}
+
+			keyFiles = make([]*os.File, *splitKeyCount)
 			for i := 0; i < *splitKeyCount; i++ {
 				keyFiles[i], err = os.Create(splitTail[i])
-				if err != nil {
-					log("error while opening output file: " + err.Error())
-					os.Exit(1)
-				}
+				errorFatal("error while opening output file", err)
 			}
 		} else {
-			for i := 0; i < *splitKeyCount; i++ {
-				keyFiles[i], err = os.Create(fmt.Sprintf("%s.key%d", splitFileName, i))
-				if err != nil {
-					log("error while opening output file: " + err.Error())
-					os.Exit(1)
+			if !*splitForceRewrite {
+				for i := 0; i < *splitKeyCount; i++ {
+					fileName := fmt.Sprintf("%s.key%d", splitFileName, i)
+					if fileExists(fileName) {
+						log.Fatalf("file %s already exists. Use -f to force rewriting", fileName)
+					}
 				}
+			}
+			keyFiles = make([]*os.File, *splitKeyCount)
+			for i := 0; i < *splitKeyCount; i++ {
+				fileName := fmt.Sprintf("%s.key%d", splitFileName, i)
+				keyFiles[i], err = os.Create(fileName)
+				errorFatal("error while opening output file", err)
 			}
 		}
 
@@ -214,45 +369,35 @@ func runCommandLine() {
 			}
 		}()
 
+		rand.Seed(getSeed())
 		err = splitIntoFiles(file, keyFiles)
-		if err != nil {
-			log("error while splitting: " + err.Error())
-		}
+		errorFatal("error while splitting", err)
 
 	case "join":
 		joinMode.Parse(os.Args[2:])
 		joinTail := joinMode.Args()
-		if *joinConfig != "" {
+		if isFlagPassed("config") {
 			file, keyFiles, err := openViaInfo(*joinConfig)
-			if err != nil {
-				log("error while opening via config: " + err.Error())
-				os.Exit(1)
-			}
+			errorFatal("error while opening via config", err)
+
 			err = joinFromFiles(file, keyFiles)
-			if err != nil {
-				log("error while joining: " + err.Error())
-			}
+			errorFatal("error while joining", err)
 		} else {
 			if len(joinTail) == 0 {
-				log("error: no files specified")
-				os.Exit(1)
+				log.Fatal("error: no files specified")
 			}
 			joinOutput, joinTail := joinTail[0], joinTail[1:]
 			if joinOutput == "" {
-				log("no output file given")
-				os.Exit(1)
+				log.Fatal("no output file given")
 			}
 			file, err := os.Create(joinOutput)
 			if err != nil {
-				log("error while opening output: " + err.Error())
-			    os.Exit(1)
+				log.Fatal("error while opening output: " + err.Error())
 			}
 			keyFiles := make([]*os.File, len(joinTail))
 			for i, keyName := range joinTail {
 				keyFiles[i], err = os.Open(keyName)
-				if err != nil {
-					log("error while opening key: " + err.Error())
-				}
+				errorFatal("error while opening key", err)
 			}
 
 			defer func() {
@@ -263,10 +408,170 @@ func runCommandLine() {
 			}()
 
 			err = joinFromFiles(file, keyFiles)
-			if err != nil {
-				log("error while joining: " + err.Error())
-			}
+			errorFatal("error while joining", err)
 		}
+
+	case "encrypt":
+		if len(os.Args) == 2 {
+			log.Fatal("error: encryption algorithm is not specified")
+		}
+
+		switch os.Args[2] {
+		case "aes":
+			aesEncMode.Parse(os.Args[3:])
+     		aesEncTail := aesEncMode.Args()
+     		var fileName, keyFileName, outputFileName string
+
+     		// checking various conditions
+			if len(aesEncTail) < 1 {
+				log.Fatal("error: no input file given")
+			}
+			if len(aesEncTail) < 2 {
+				if *aesEncRewrite {
+					log.Fatal("error: no key file given")
+				} else {
+					log.Fatal("error: no output file given")
+				}
+			}
+			if (!*aesEncRewrite) && len(aesEncTail) < 3 {
+				log.Fatal("error: no key file given")
+			}
+
+			fileName = aesEncTail[0]
+			if *aesEncRewrite {
+				keyFileName = aesEncTail[1]
+				outputFileName = fileName
+			} else {
+				outputFileName = aesEncTail[1]
+				keyFileName = aesEncTail[2]
+			}
+
+			if !*aesEncForce && fileExists(keyFileName) {
+				askForRewrite(keyFileName)
+			}
+			if !*aesEncForce && !*aesEncRewrite && fileExists(outputFileName) {
+				askForRewrite(outputFileName)
+			}
+
+			// encrypting
+			var key []byte
+			if isFlagPassed("key") {
+				var err error
+				key, err = hex.DecodeString(*aesEncKey)
+				errorFatal("error: invalid hex key", err)
+			} else {
+				key = make([]byte, 32)
+				rand.Seed(getSeed())
+				rand.Read(key)
+			}
+
+			file, err := os.Open(fileName)
+			errorFatal("error while opening input file", err)
+
+			keyFile, err := os.Create(keyFileName)
+			errorFatal("error while creating key file", err)
+
+			defer keyFile.Close()
+
+			var buf bytes.Buffer
+			err = aesGCMEncrypt(file, &buf, key)
+			errorFatal("error while encrypting", err)
+
+			file.Close()
+			if *aesEncHex {
+				hexString := hex.EncodeToString(key)
+				fmt.Fprint(keyFile, hexString)
+			} else {
+				keyFile.Write(key)
+			}
+
+			file, err = os.Create(outputFileName)
+			errorFatal("error while writing file", err)
+
+			file.Write(buf.Bytes())
+
+		default:
+			log.Println("error: unknown encryption type")
+			os.Exit(1)
+		}
+
+	case "decrypt":
+		if len(os.Args) == 2 {
+			log.Fatal("error: decryption algorithm is not specified")
+		}
+
+		switch os.Args[2] {
+		case "aes":
+    		aesDecMode.Parse(os.Args[3:])
+    		aesDecTail := aesDecMode.Args()
+    		keyPassed := isFlagPassed("key")
+
+			var fileName, outputFileName, keyFileName string
+
+    		if len(aesDecTail) < 1 {
+    			log.Fatal("no input file given")
+			}
+			fileName, aesDecTail = aesDecTail[0], aesDecTail[1:]
+
+			if !*aesDecRewrite && len(aesDecTail) < 1 {
+				log.Fatal("no output file given")
+			}
+			if !*aesDecRewrite {
+				outputFileName, aesDecTail = aesDecTail[0], aesDecTail[1:]
+			} else {
+				outputFileName = fileName
+			}
+
+			if !keyPassed && len(aesDecTail) < 1 {
+				log.Fatal("no key file given")
+			}
+			if !keyPassed {
+				keyFileName = aesDecTail[0]
+			}
+
+			var key []byte
+			var err error
+			if keyPassed {
+				key, err = hex.DecodeString(*aesDecKey)
+				errorFatal("error while decoding key", err)
+			} else {
+				key, err = ioutil.ReadFile(keyFileName)
+				errorFatal("error while reading key", err)
+
+				if *aesDecHex {
+					keyBuf := make([]byte, hex.DecodedLen(len(key)))
+					_, err := hex.Decode(keyBuf, key)
+					key = keyBuf
+					errorFatal("error while converting hex key", err)
+				}
+			}
+
+			file, err := os.Open(fileName)
+			errorFatal("error while opening input file", err)
+
+			var buf bytes.Buffer
+			err = aesGCMDecrypt(file, &buf, key)
+			errorFatal("error while decrypting", err)
+
+			_ = file.Close()
+			if !*aesDecForce && !*aesDecRewrite && fileExists(outputFileName) {
+				askForRewrite(outputFileName)
+			}
+			file, err = os.Create(outputFileName)
+			errorFatal("error while creating output file", err)
+
+			_, err = file.Write(buf.Bytes())
+			errorFatal("error while writing to output", err)
+			_ = file.Close()
+
+
+		default:
+			log.Fatal("error: unknown decryption type")
+		}
+
+
+	default:
+		log.Printf("Unknown command %s. Visit github.com/imobulus/bitsplit or use --help for help\n", os.Args[1])
 	}
 }
 
@@ -274,109 +579,3 @@ func main() {
 	runCommandLine()
 }
 
-func _runCommandLine() {
-	restoreMode := flag.Bool("restore", false, "")
-	infoFile := flag.String("info", "", "info file name")
-	splitNum := flag.Int("n", 2, "number of files to split to")
-	splitName := flag.String("split", "", "name of the file to split")
-	keepFiles := flag.Bool("keep", false, "if specified, will not remove files")
-
-	flag.Parse()
-
-	if *restoreMode  {
-		if *infoFile != "" {
-			file, keyFileRefs, _ := openViaInfo(*infoFile)
-			defer func() {
-				file.Close()
-				if !*keepFiles {
-					os.Remove(*infoFile)
-				}
-				for _, file := range keyFileRefs {
-					file.Close()
-					if !*keepFiles {
-						os.Remove(file.Name())
-					}
-				}
-			}()
-			keyFiles := make([]io.Reader, len(keyFileRefs))
-			for i, key := range keyFileRefs {
-				keyFiles[i] = key
-			}
-			join(file, keyFiles)
-
-
-		} else {
-			log("cannot restore using given information")
-			os.Exit(1)
-		}
-	} else {
-		if *splitNum < 2 {
-			log("split number should be greater than 2")
-			os.Exit(1)
-		}
-		if *splitName == "" {
-			log("no split file name given")
-			os.Exit(1)
-		}
-		infoFile, err := os.Create(fmt.Sprintf("%s.info", *splitName))
-		defer infoFile.Close()
-		if err = checkErr(err); err != nil {
-			os.Exit(1)
-		}
-		file, err := os.Open(*splitName)
-		if err = checkErr(err); err != nil {
-			os.Exit(1)
-		}
-		infoFile.Write([]byte(*splitName + "\n"))
-
-		keys := make([]*os.File, *splitNum)
-		for i := 0; i < *splitNum; i++ {
-			keyFileName := fmt.Sprintf("%s.key%d", *splitName, i)
-			keyFile, err := os.Create(keyFileName)
-			if err = checkErr(err); err != nil {
-				os.Exit(1)
-			}
-			infoFile.Write([]byte(keyFileName + "\n"))
-			keys[i] = keyFile
-		}
-		defer func() {
-			infoFile.Close()
-			file.Close()
-			if !*keepFiles {
-				os.Remove(file.Name())
-			}
-			for _, key := range keys {
-				key.Close()
-			}
-		}()
-
-		keysWriters := make([]io.Writer, len(keys))
-		for i, key := range keys {
-			keysWriters[i] = key
-		}
-		err = split(file, keysWriters)
-		if err = checkErr(err); err != nil {
-			os.Exit(1)
-		}
-	}
-}
-
-func testSplit() {
-	file, _ := os.Open("code.txt")
-	key1, _ := os.Create("code.key1")
-	key2, _ := os.Create("code.key2")
-	defer file.Close()
-	defer key1.Close()
-	defer key2.Close()
-	split(file, []io.Writer{key1, key2})
-}
-
-func testJoin() {
-	file, _ := os.Create("code.txt")
-	key1, _ := os.Open("code.key1")
-	key2, _ := os.Open("code.key2")
-	defer file.Close()
-	defer key1.Close()
-	defer key2.Close()
-	join(file, []io.Reader{key1, key2})
-}
