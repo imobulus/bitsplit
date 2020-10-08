@@ -26,11 +26,59 @@ type IOError struct {
 	details  string
 	contents error
 }
-
 func (err IOError) Error() string {
 	return err.details + "\n" + err.contents.Error()
 }
 
+//---- operations on byte arrays ----
+func Add(a, b []byte) []byte {
+	lenA, lenB := len(a), len(b)
+	var maxLen int
+	if lenA < lenB {
+		maxLen = lenB
+	} else {
+		maxLen = lenA
+	}
+
+	s := make([]byte, maxLen)
+	for i := 0; i < maxLen; i++ {
+		if i < lenA {
+			s[i] += a[i]
+		}
+		if i < lenB {
+			s[i] += b[i]
+		}
+	}
+
+	return s
+}
+
+func Sum(byteArrays [][]byte) []byte {
+	maxLen := 0
+	for _, arr := range byteArrays {
+		if maxLen < len(arr) {
+			maxLen = len(arr)
+		}
+	}
+
+	sumArr := make([]byte, maxLen)
+	for i := 0; i < maxLen; i++ {
+		for _, arr := range byteArrays {
+			if len(arr) > i {
+				sumArr[i] += arr[i]
+			}
+		}
+	}
+	return sumArr
+}
+
+func Neg(a []byte) []byte {
+	b := make([]byte, len(a))
+	for i := 0; i < len(a); i++ {
+		b[i] = -a[i]
+	}
+	return b
+}
 //---- useful functions ----
 func GetSeed() int64 {
 	seed := time.Now().UTC().UnixNano()
@@ -72,30 +120,18 @@ func Split(file io.Reader, keys []io.Writer) error {
 		return IOError{"while reading file contents", err}
 	}
 
-	l := len(keys)
-	if l < 2 {
-		return fmt.Errorf("less than 2 key files provided")
-	}
-
-	rands := make([]byte, l-1)
-
-	for _, b := range data {
-		sum := byte(0)
-		rand.Read(rands)
-		for _, k := range rands {
-			sum += k
-		}
-
-		_, err = keys[0].Write([]byte{b - sum})
+	randoms := make([]byte, len(data))
+	for _, writer := range keys[1:] {
+		rand.Read(randoms)
+		_, err := writer.Write(Neg(randoms))
 		if err != nil {
 			return IOError{"while writing keys", err}
 		}
-        for i, key := range keys[1:] {
-			_, err = key.Write([]byte{rands[i]})
-			if err != nil {
-				return IOError{"while writing keys", err}
-			}
-		}
+		data = Add(data, randoms)
+	}
+	_, err = keys[0].Write(data)
+	if err != nil {
+		return IOError{"while writing keys", err}
 	}
 	return nil
 }
@@ -123,24 +159,9 @@ func Join(file io.Writer, keys []io.Reader) error {
 		}
 	}
 
-    maxlength := len(contents[0])
-    for _, d := range contents {
-    	if maxlength < len(d) {
-    		maxlength = len(d)
-		}
-	}
-
-	for i := 0; i < maxlength; i++ {
-        sum := byte(0)
-        for j := 0; j < l; j++ {
-        	if len(contents[j]) > i {
-        		sum += contents[j][i]
-			}
-		}
-		_, err := file.Write([]byte{sum})
-		if err != nil {
-			return IOError{"writing result", err}
-		}
+	_, err = file.Write(Sum(contents))
+	if err != nil {
+		return IOError{"while writing sum", err}
 	}
 	return nil
 }
