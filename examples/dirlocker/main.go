@@ -315,6 +315,8 @@ func runCommandLine() {
 		_, err = Lock(*lockDir, *lockKeyDir)
 		errorFatal("", err)
 	case "unlock":
+		err := lock.Parse(os.Args[2:])
+		errorFatal("can't parse flags", err)
 		if !osutil.IsFlagPassed("keydir") {
 			for _, d := range osutil.GetDrives() {
 				code, err := Unlock(*lockDir, d)
