@@ -23,11 +23,19 @@ var (
 )
 
 type IOError struct {
-	details  string
-	contents error
+	Details  string
+	Contents error
 }
 func (err IOError) Error() string {
-	return err.details + "\n" + err.contents.Error()
+	return err.Details + "\n" + err.Contents.Error()
+}
+
+type OSError struct {
+	Details string
+	Contents error
+}
+func (err OSError) Error() string {
+	return err.Details + "\n" + err.Contents.Error()
 }
 
 //---- operations on byte arrays ----
@@ -79,6 +87,7 @@ func Neg(a []byte) []byte {
 	}
 	return b
 }
+
 //---- useful functions ----
 func GetSeed() int64 {
 	seed := time.Now().UTC().UnixNano()

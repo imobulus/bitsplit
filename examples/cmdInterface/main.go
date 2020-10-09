@@ -1,12 +1,12 @@
 package main
 
 import (
-	"bitsplit"
-	"bufio"
 	"bytes"
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"github.com/imobulus/bitsplit"
+	"github.com/imobulus/bitsplit/osutil"
 	"io/ioutil"
 	"log"
 	"math/rand"
@@ -16,7 +16,6 @@ import (
 
 var (
 	errLog = log.New(os.Stderr, "error: ", 0)
-	warnLog = log.New(os.Stderr, "warning: ", 0)
 	stdLog = log.New(os.Stdout, "", 0)
 )
 
@@ -29,36 +28,10 @@ func errorFatal(message string, err error) {
 	}
 }
 
-func prompt(action string) bool {
-	reader := bufio.NewReader(os.Stdin)
-	stdLog.Print(action + " [y/n] ")
-	text, _ := reader.ReadString('\n')
-	text = text[:len(text) - 2]
-	return (strings.ToLower(text) == "y") || (strings.ToLower(text) == "yes")
-}
-
 func askForRewrite(fileName string) {
-	if ! prompt(fmt.Sprintf("file %s already exists, do you want to overwrite it?", fileName)) {
+	if ! osutil.Promptf("file %s already exists, do you want to overwrite it?", fileName) {
 		errLog.Fatal("error: file already exists")
 	}
-}
-
-func fileExists(filename string) bool {
-	info, err := os.Stat(filename)
-	if os.IsNotExist(err) {
-		return false
-	}
-	return !info.IsDir()
-}
-
-func isFlagPassed(name string) bool {
-	found := false
-	flag.Visit(func(f *flag.Flag) {
-		if f.Name == name {
-			found = true
-		}
-	})
-	return found
 }
 
 //---- command line executives ----
@@ -102,7 +75,7 @@ func DoSplit(args []string) {
 
 	splitMode.Parse(args)
 	splitTail := splitMode.Args()
-	splitCountProvided := isFlagPassed("k")
+	splitCountProvided := osutil.IsFlagPassed("k")
 
 	if len(splitTail) == 0 {
 		errLog.Fatal("no specification given")
@@ -128,7 +101,7 @@ func DoSplit(args []string) {
 
 		if !*splitForceRewrite {
 			for i := 0; i < *splitKeyCount; i++ {
-				if fileExists(splitTail[i]) {
+				if osutil.FileExists(splitTail[i]) {
 					askForRewrite(splitTail[i])
 				}
 			}
@@ -143,7 +116,7 @@ func DoSplit(args []string) {
 		if !*splitForceRewrite {
 			for i := 0; i < *splitKeyCount; i++ {
 				fileName := fmt.Sprintf("%s.key%d", splitFileName, i)
-				if fileExists(fileName) {
+				if osutil.FileExists(fileName) {
 					askForRewrite(fileName)
 				}
 			}
@@ -175,7 +148,7 @@ func DoJoin(args []string) {
 
 	joinMode.Parse(args)
 	joinTail := joinMode.Args()
-	if isFlagPassed("config") {
+	if osutil.IsFlagPassed("config") {
 		file, keyFiles, err := OpenViaInfo(*joinConfig)
 		errorFatal("while opening via config", err)
 		defer func() {
@@ -259,10 +232,10 @@ func DoEncryptAES(args []string) {
 	// getting the key
 	var key []byte
 	var err error
-	if isFlagPassed("key") {
+	if osutil.IsFlagPassed("key") {
 		key, err = hex.DecodeString(*aesEncKey)
 		errorFatal("invalid hex key", err)
-	} else if *aesEncReuse && fileExists(keyFileName){
+	} else if *aesEncReuse && osutil.FileExists(keyFileName){
 		key, err = ioutil.ReadFile(keyFileName)
 		errorFatal("while reading key file", err)
 
@@ -278,8 +251,8 @@ func DoEncryptAES(args []string) {
 	}
 
 	// saving the key if needed
-	if !*aesEncReuse || !fileExists(keyFileName) {  // we need to rewrite key only if we weren't said to reuse it or
-		if !*aesEncForce && fileExists(keyFileName) { // the file does not exist
+	if !*aesEncReuse || !osutil.FileExists(keyFileName) { // we need to rewrite key only if we weren't said to reuse it or
+		if !*aesEncForce && osutil.FileExists(keyFileName) { // the file does not exist
 			askForRewrite(keyFileName)
 		}
 		keyFile, err := os.Create(keyFileName)
@@ -305,7 +278,7 @@ func DoEncryptAES(args []string) {
 	file.Close()
 
 	// writing encrypted data
-	if !*aesEncForce && !*aesEncRewrite && fileExists(outputFileName) {
+	if !*aesEncForce && !*aesEncRewrite && osutil.FileExists(outputFileName) {
 		askForRewrite(outputFileName)
 	}
 	file, err = os.Create(outputFileName)
@@ -326,7 +299,7 @@ func DoDecryptAES(args []string) {
 
 	aesDecMode.Parse(args)
 	aesDecTail := aesDecMode.Args()
-	keyPassed := isFlagPassed("key")
+	keyPassed := osutil.IsFlagPassed("key")
 
 	var fileName, outputFileName, keyFileName string
 
@@ -376,7 +349,7 @@ func DoDecryptAES(args []string) {
 	errorFatal("while decrypting", err)
 
 	_ = file.Close()
-	if !*aesDecForce && !*aesDecRewrite && fileExists(outputFileName) {
+	if !*aesDecForce && !*aesDecRewrite && osutil.FileExists(outputFileName) {
 		askForRewrite(outputFileName)
 	}
 	file, err = os.Create(outputFileName)
@@ -401,7 +374,7 @@ func DoKeygen(args []string) {
 	}
 	keyFileName := keygenTail[0]
 
-	if fileExists(keyFileName) && !*keygenForce {
+	if osutil.FileExists(keyFileName) && !*keygenForce {
 		askForRewrite(keyFileName)
 	}
 	key := make([]byte, *keyLength)

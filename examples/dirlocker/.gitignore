@@ -1,0 +1,5 @@
+~*
+*.exe
+/secure/**
+*.bat
+/.idea
