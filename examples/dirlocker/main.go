@@ -160,6 +160,7 @@ func Lock(lockDir, keyDir string) (int, error) {
 	abortIfError( osutil.HideFile(filepath.Join(keyDir, hash)) )
 
 	abortIfError( ioutil.WriteFile(LockFileName, []byte(hash), 0644) )
+	_ = osutil.HideFile(LockFileName)
 
 	err = os.RemoveAll(tempDir)
 	if err != nil {
