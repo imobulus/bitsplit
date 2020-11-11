@@ -302,7 +302,7 @@ func runCommandLine() {
 	case "lock":
 		err := lock.Parse(os.Args[2:])
 		errorFatal("can't parse flags", err)
-		if !osutil.IsFlagPassed("keydir") {
+		if !osutil.IsFlagPassedInSet(lock,"keydir") {
 			drives := osutil.GetDrives()
 			if len(drives) == 0 {
 				errLog.Fatal("specify your key directory using -keydir")
@@ -318,7 +318,7 @@ func runCommandLine() {
 	case "unlock":
 		err := lock.Parse(os.Args[2:])
 		errorFatal("can't parse flags", err)
-		if !osutil.IsFlagPassed("keydir") {
+		if !osutil.IsFlagPassedInSet(lock,"keydir") {
 			for _, d := range osutil.GetDrives() {
 				code, err := Unlock(*lockDir, d)
 				switch code {

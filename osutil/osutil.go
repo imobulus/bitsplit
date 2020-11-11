@@ -66,6 +66,16 @@ func IsFlagPassed(name string) bool {
 	return found
 }
 
+func IsFlagPassedInSet(set *flag.FlagSet, name string) bool {
+	found := false
+	set.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
+}
+
 func HideFile(filename string) error {
 	filenameW, err := syscall.UTF16PtrFromString(filename)
 	if err != nil {
