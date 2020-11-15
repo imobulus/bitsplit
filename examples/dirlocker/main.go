@@ -57,7 +57,8 @@ func Lock(lockDir, keyDir string) (int, error) {
 
 	if osutil.FileExists(LockFileName) &&
 		!osutil.Promptf(
-			"lock file %s already exists, the directory could already be locked. Do you want to lock it again?",
+			"lock file %s already exists, the directory could already be locked. " +
+				"This operation will overwrite the lock file. Proceed?",
 			LockFileName) {
 		os.Exit(0)
 	}
@@ -161,6 +162,10 @@ func Lock(lockDir, keyDir string) (int, error) {
 
 	abortIfError( ioutil.WriteFile(LockFileName, []byte(hash), 0644) )
 	_ = osutil.HideFile(LockFileName)
+	err = os.Chmod(LockFileName, 0444)
+	if err != nil {
+		errLog.Println("can't make lock file read-only")
+	}
 
 	err = os.RemoveAll(tempDir)
 	if err != nil {
@@ -241,6 +246,7 @@ func Unlock(unlockDir, keyDir string) (int, error) {
 	}
 
 	//remove the lock file since it is not encrypted
+	abortIfError( os.Chmod(LockFileName, 0222) )
 	abortIfError( os.Remove(LockFileName) )
 
 	//decrypting
