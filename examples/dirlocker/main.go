@@ -86,26 +86,36 @@ func Lock(lockDir, keyDir string) (int, error) {
 	}
 
 	//if there are further errors we call abortIfError() to undo changes
-	abortIfError := func(errMaster error) {
+	abortIfError := func(errMaster error, message string) {
 		if errMaster == nil {
 			return
 		}
-		errLog.Println(err, "\naborting...")
+		errLog.Println(message)
+		errLog.Println(errMaster.Error(), "\naborting...")
 
 		_ = os.Chdir("..")
-		err = os.RemoveAll(lockDir)
+		err = osutil.RemoveContents(lockDir)
 		if err != nil {
-			errLog.Fatalf("abort removing current dir unsuccessful. All files are stored in %s\n%e", tempDir, err)
+			errLog.Fatalf (
+				"abort removing current dir unsuccessful. All files are stored in %s\n%e",
+				tempDir,
+				err.Error() )
 		}
 
 		err = osutil.CopyDir(tempDir, lockDir)
 		if err != nil {
-			errLog.Fatalf("abort copying unsuccessful. All files are stored in %s\n%e", tempDir, err)
+			errLog.Fatalf (
+				"abort copying unsuccessful. All files are stored in %s\n%e",
+				tempDir,
+				err.Error() )
 		}
 
 		err = os.RemoveAll(tempDir)
 		if err != nil {
-			errLog.Fatalf("abort removing temp dir unsuccessful. Remove %s manually.\n%e", tempDir, err)
+			errLog.Fatalf (
+				"abort removing temp dir unsuccessful. Remove %s manually.\n%e",
+				tempDir,
+				err.Error() )
 		}
 		os.Exit(1)
 	}
@@ -153,18 +163,25 @@ func Lock(lockDir, keyDir string) (int, error) {
 
 		return nil
 	})
-	abortIfError(err)
+	abortIfError(err, "while walking file tree")
 
 	hash := hex.EncodeToString(h.Sum(nil))
-	abortIfError( ioutil.WriteFile(filepath.Join(keyDir, hash), key, 0644) )
+	abortIfError( ioutil.WriteFile(filepath.Join(keyDir, hash), key, 0644), "while writing key" )
 
-	abortIfError( osutil.HideFile(filepath.Join(keyDir, hash)) )
+	abortIfError( osutil.HideFile(filepath.Join(keyDir, hash)), "can't hide key file" )
 
-	abortIfError( ioutil.WriteFile(LockFileName, []byte(hash), 0644) )
-	_ = osutil.HideFile(LockFileName)
+	abortIfError( ioutil.WriteFile(LockFileName, []byte(hash), 0644), "can't write key file" )
+
+	abortIfError( osutil.HideFile(LockFileName), "can't hide lock file" )
+
 	err = os.Chmod(LockFileName, 0444)
 	if err != nil {
 		errLog.Println("can't make lock file read-only")
+	}
+
+	err = os.Chmod(filepath.Join(keyDir, hash), 0444)
+	if err != nil {
+		errLog.Println("can't make key file read-only")
 	}
 
 	err = os.RemoveAll(tempDir)
@@ -221,33 +238,43 @@ func Unlock(unlockDir, keyDir string) (int, error) {
 	}
 
 	//if there are further errors we call abortIfError() to undo changes
-	abortIfError := func(errMaster error) {
+	abortIfError := func(errMaster error, message string) {
 		if errMaster == nil {
 			return
 		}
-		errLog.Println(err, "\naborting...")
+		errLog.Println(message)
+		errLog.Println(errMaster.Error(), "\naborting...")
 
 		_ = os.Chdir("..")
-		err = os.RemoveAll(unlockDir)
+		err = osutil.RemoveContents(unlockDir)
 		if err != nil {
-			errLog.Fatalf("abort removing current dir unsuccessful. All files are stored in %s\n%e", tempDir, err)
+			errLog.Fatalf(
+				"abort removing current dir unsuccessful. All files are stored in %s\n%e",
+				tempDir,
+				err.Error())
 		}
 
 		err = osutil.CopyDir(tempDir, unlockDir)
 		if err != nil {
-			errLog.Fatalf("abort copying unsuccessful. All files are stored in %s\n%e", tempDir, err)
+			errLog.Fatalf(
+				"abort copying unsuccessful. All files are stored in %s\n%e",
+				tempDir,
+				err.Error())
 		}
 
 		err = os.RemoveAll(tempDir)
 		if err != nil {
-			errLog.Fatalf("abort removing temp dir unsuccessful. Remove %s manually.\n%e", tempDir, err)
+			errLog.Fatalf(
+				"abort removing temp dir unsuccessful. Remove %s manually.\n%e",
+				tempDir,
+				err.Error())
 		}
 		os.Exit(1)
 	}
 
 	//remove the lock file since it is not encrypted
-	abortIfError( os.Chmod(LockFileName, 0222) )
-	abortIfError( os.Remove(LockFileName) )
+	abortIfError( os.Chmod(LockFileName, 0222), "can't make lock file writable" )
+	abortIfError( os.Remove(LockFileName), "can't remove lock file" )
 
 	//decrypting
 	err = filepath.Walk(".", func (path string, info os.FileInfo, err error) error {
@@ -280,7 +307,7 @@ func Unlock(unlockDir, keyDir string) (int, error) {
 
 		return nil
 	})
-	abortIfError(err)
+	abortIfError(err, "while walking file tree")
 
 	err = os.Remove(filepath.Join(keyDir, keyFileName))
 	if err != nil {
