@@ -47,6 +47,7 @@ func Lock(lockDir, keyDir string) (int, error) {
 		return CodeKeyDirNotExist, fmt.Errorf("can't find directory %s", keyDir)
 	}
 
+	keyDir, _ = filepath.Abs(keyDir)
 	lockDir, _ = filepath.Abs(lockDir)
 	if lockDir == os.TempDir() {
 		errLog.Fatal("can't lock tmp directory")
@@ -85,6 +86,14 @@ func Lock(lockDir, keyDir string) (int, error) {
 		errLog.Fatal("copying unsuccessful\n" + err.Error())
 	}
 
+	h := sha1.New()
+	key := make([]byte, 32)
+	rand.Seed(bitsplit.GetSeed())
+	rand.Read(key)
+	h.Write(key)
+
+	hash := hex.EncodeToString(h.Sum(nil))
+
 	//if there are further errors we call abortIfError() to undo changes
 	abortIfError := func(errMaster error, message string) {
 		if errMaster == nil {
@@ -92,6 +101,11 @@ func Lock(lockDir, keyDir string) (int, error) {
 		}
 		errLog.Println(message)
 		errLog.Println(errMaster.Error(), "\naborting...")
+
+		err = os.Remove(filepath.Join(keyDir, hash))
+		if err != nil {
+            errLog.Printf("error removing key file %s, remove manually\n", filepath.Join(keyDir, hash))
+		}
 
 		_ = os.Chdir("..")
 		err = osutil.RemoveContents(lockDir)
@@ -120,11 +134,7 @@ func Lock(lockDir, keyDir string) (int, error) {
 		os.Exit(1)
 	}
 
-    h := sha1.New()
-    key := make([]byte, 32)
-    rand.Seed(bitsplit.GetSeed())
-    rand.Read(key)
-    h.Write(key)
+	abortIfError( ioutil.WriteFile(filepath.Join(keyDir, hash), key, 0644), "while writing key" )
 
     //encrypting
 	err = filepath.Walk(".", func (path string, info os.FileInfo, err error) error {
@@ -163,10 +173,8 @@ func Lock(lockDir, keyDir string) (int, error) {
 
 		return nil
 	})
-	abortIfError(err, "while walking file tree")
 
-	hash := hex.EncodeToString(h.Sum(nil))
-	abortIfError( ioutil.WriteFile(filepath.Join(keyDir, hash), key, 0644), "while writing key" )
+	abortIfError(err, "while walking file tree")
 
 	abortIfError( osutil.HideFile(filepath.Join(keyDir, hash)), "can't hide key file" )
 
